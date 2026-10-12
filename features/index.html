@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SPACE · Every Feature</title>
+<link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">SPACE <span>· feature index</span></div>
+  <input id="q" type="search" placeholder="filter features… (e.g. hls, totp, cards)" autocomplete="off"/>
+</header>
+
+<section class="hero">
+  <h1>Every feature. Precisely.</h1>
+  <p class="lede">
+    The complete capability map of the SPACE media server — each entry matches
+    shipped code and real endpoints. Filter by text or jump by category.
+  </p>
+  <div class="cats" id="cats"></div>
+</section>
+
+<main id="grid" class="grid"></main>
+
+<footer>
+  <div class="foot-inner">
+    <div><b>SPACE media server</b><br/>
+      <span class="muted">spec <code>/api-docs/openapi.json</code> · ui <code>/docs</code> · how-it-works <code>/site/</code></span></div>
+    <div class="muted" id="count-line"></div>
+  </div>
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SPACE — Media Platform</title>
+<link rel="stylesheet" href="/styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <nav id="topbar" class="hidden">
+    <a class="brand" href="#/">SPACE</a>
+    <div class="nav-links">
+      <a href="#/" data-nav>Home</a>
+      <a href="#/browse" data-nav>Browse</a>
+      <a href="#/sources" data-nav>Sources</a>
+      <a href="#/search" data-nav>Search</a>
+      <a href="#/parties" data-nav>Parties</a>
+      <a href="#/collections" data-nav>Collections</a>
+    </div>
+    <div class="spacer"></div>
+    <span id="presence-badge" title="online users">●</span>
+    <a href="#/settings" data-nav id="user-chip"></a>
+    <button id="logout-btn" class="ghost">Log out</button>
+  </nav>
+
+  <main id="view"></main>
+
+  <!-- auth -->
+  <section id="auth-screen">
+    <div class="auth-card">
+      <h1 class="brand-big">SPACE</h1>
+      <p class="tagline">One platform. Movies, series & anime — streamed, tracked, social.</p>
+      <div class="tabs">
+        <button class="tab active" data-tab="login">Sign in</button>
+        <button class="tab" data-tab="register">Create account</button>
+      </div>
+      <form id="login-form" class="stack">
+        <input name="identifier" placeholder="username or email" required autocomplete="username" />
+        <input name="password" type="password" placeholder="password" required autocomplete="current-password" />
+        <button type="submit">Sign in</button>
+        <a class="muted small" href="#" id="forgot-link">Forgot password?</a>
+      </form>
+      <form id="register-form" class="stack hidden">
+        <input name="username" placeholder="username" minlength="3" maxlength="32" required />
+        <input name="email" type="email" placeholder="email" required />
+        <input name="display_name" placeholder="display name (optional)" />
+        <input name="password" type="password" placeholder="password (min 8, mix letters+digits)" required autocomplete="new-password" />
+        <button type="submit">Create account</button>
+      </form>
+      <p id="auth-error" class="error hidden"></p>
+    </div>
+  </section>
+
+  <!-- player overlay -->
+  <div id="player-overlay" class="hidden">
+    <video id="video" controls playsinline></video>
+    <div class="player-bar">
+      <button id="player-close" class="ghost">✕ Close</button>
+      <span id="now-playing-title" class="muted"></span>
+      <button id="skip-intro" class="accent hidden">Skip intro ⏭</button>
+      <button id="skip-credits" class="accent hidden">Skip credits ⏭</button>
+      <button id="handoff-btn" class="ghost" title="Continue on another device">📱 Handoff</button>
+      <span id="handoff-code" class="code hidden"></span>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

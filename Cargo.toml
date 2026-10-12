@@ -1,0 +1,88 @@
+[package]
+name = "space"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes-gcm = "0.10"
+anyhow = "1"
+argon2 = "0.5"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6"
+# Single DES, only ever used to decrypt JioSaavn's media URLs: the site
+# ships the CDN path DES-encrypted under a fixed published key. Decrypting it
+# here is what turns a music result into a direct, seekable audio URL instead
+# of a page.
+des = "0.8"
+cipher = { version = "0.4", features = ["block-padding"] }
+deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
+dotenvy = "0.15"
+futures-util = "0.3"
+hex = "0.4"
+hkdf = "0.12"
+hmac = "0.12"
+metrics = "0.24"
+# Embedded PostgreSQL server, behind the 'embedded-db' feature. The 'bundled'
+# feature compiles the server binaries into this executable at build time, so a
+# machine needs nothing installed and no network at run time.
+#
+# Requires the MSVC toolchain on Windows: upstream publishes PostgreSQL builds
+# for x86_64-pc-windows-msvc but not -gnu, so the build script cannot resolve an
+# archive under a GNU toolchain. See README, "Embedded database".
+postgresql_embedded = { version = "0.21", features = ["bundled", "theseus"], default-features = false, optional = true }
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+rand = "0.9"
+regex = "1"
+roxmltree = "0.20"
+rustfft = "6"
+# In-process audio decoding. Pure Rust, so music analysis needs no external
+# binary; ffmpeg stays a fallback for formats symphonia cannot open.
+symphonia = { version = "0.5", features = ["all"] }
+# EBU R128 loudness, the same measurement ffmpeg's ebur128 filter reports.
+ebur128 = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls-ring",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+    "migrate",
+    "macros",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower = "0.5"
+url = "2"
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+utoipa = { version = "5", features = ["uuid", "chrono", "axum_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+walkdir = "2"
+# Extracting the ffmpeg archive when the server provisions it itself.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+boa_engine = "0.22.0"
+
+[features]
+default = []
+# Bundle a PostgreSQL server into the binary; DATABASE_URL then becomes optional.
+embedded-db = ["dep:postgresql_embedded"]
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+

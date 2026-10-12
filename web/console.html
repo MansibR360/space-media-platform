@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>SPACE · Admin Console</title>
+<style>
+  :root { --bg:#0b0e14; --panel:#131826; --panel2:#1a2032; --text:#e8ecf4; --muted:#8b93a7; --accent:#6c8cff; --ok:#43d9a3; --err:#ff5c74; }
+  * { box-sizing:border-box }
+  body { background:var(--bg); color:var(--text); font-family:Inter,'Segoe UI',system-ui,sans-serif; margin:0; padding:24px }
+  h1 { letter-spacing:3px } h1 span { color:var(--accent) } h3 { margin:14px 0 8px }
+  .panel { background:var(--panel); border-radius:12px; padding:18px; margin:14px auto; max-width:1100px }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center }
+  .muted { color:var(--muted); font-size:13px } .ok { color:var(--ok) } .err { color:var(--err) }
+  input,select { background:var(--panel2); color:var(--text); border:1px solid #273049; border-radius:8px; padding:9px 11px }
+  button { background:var(--panel2); color:var(--text); border:none; border-radius:8px; padding:9px 15px; cursor:pointer }
+  button.accent { background:var(--accent); color:#08101f; font-weight:700 }
+  button.danger { background:var(--err); color:#fff }
+  table { width:100%; border-collapse:collapse; margin-top:10px }
+  td,th { padding:8px 10px; border-bottom:1px solid #1e2537; text-align:left; font-size:13px }
+  code { background:#000; padding:2px 7px; border-radius:5px }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px }
+  .kpi { background:var(--panel2); border-radius:10px; padding:14px }
+  .kpi b { display:block; font-size:26px; margin-top:4px }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; max-width:1100px; margin:16px auto 0 }
+  .tab { padding:9px 18px } .tab.active { background:var(--accent); color:#08101f; font-weight:700 }
+  section.tabpage { display:none } section.tabpage.active { display:block }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px }
+  pre { white-space:pre-wrap; background:#000; border-radius:8px; padding:12px; font-size:12px; overflow:auto; max-height:300px }
+  .hidden { display:none !important }
+</style>
+</head>
+<body>
+<h1>SPACE <span>· admin console</span> <span id="live-dot" class="muted" style="font-size:13px"></span></h1>
+
+<h1>SPACE <span>· admin console</span> <span id="live-dot" class="muted" style="font-size:13px"></span>
+  <button id="logout" class="danger" style="float:right">Sign out</button></h1>
+
+<!-- HONEYPOT: still present post-auth for lazy session-riding bots. -->
+<div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px">
+  <label>Confirm secret dump <input name="confirm_secret_dump" id="hp-field-1" tabindex="-1" autocomplete="off"/></label>
+  <a href="/api/admin/debug/dump-secrets" id="hp-link">internal: dump signing secrets</a>
+</div>
+
+<div class="tabs hidden" id="tabbar">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="users">Users</button>
+  <button class="tab" data-tab="plugins">Plugins &amp; Sources</button>
+  <button class="tab" data-tab="websources">Web Sources</button>
+  <button class="tab" data-tab="extensions">Extensions</button>
+  <button class="tab" data-tab="health">Source Health</button>
+  <button class="tab" data-tab="library">Library</button>
+  <button class="tab" data-tab="streams">Streams & Jobs</button>
+  <button class="tab" data-tab="billing">Payments</button>
+  <button class="tab" data-tab="automations">Automations</button>
+  <button class="tab" data-tab="security">Security</button>
+  <button class="tab" data-tab="ai">AI Copilot</button>
+  <button class="tab" data-tab="cards">Cards &amp; Defense</button>
+  <button class="tab" data-tab="system">System</button>
+</div>
+
+<section class="tabpage active panel hidden" id="tp-overview">
+  <h3>Live KPIs <span class="muted small">(auto-refresh 3s)</span></h3>
+  <div class="kpis" id="kpis"></div>
+  <h3>Readiness</h3><div id="ready-line" class="muted">—</div>
+</section>
+
+<section class="tabpage panel hidden" id="tp-users">
+  <h3>Users</h3>
+  <table id="user-rows"><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Joined</th><th>Grant permission</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-plugins">
+  <h3>Built-in native sources <span class="muted small">(compiled in, zero-hop)</span></h3>
+  <table id="native-rows"><tbody></tbody></table>
+  <h3>Add a source by URL (auto-detect)</h3>
+  <div class="row" style="margin-bottom:10px">
+    <input id="reg-url" placeholder="https://plugin.example.com" style="min-width:340px"/>
+    <button class="accent" onclick="registerUrl()">Probe &amp; register</button>
+  </div>
+  <p id="reg-msg" class="muted">Tries manifest.json → /items → /search and picks the right kind automatically.</p>
+  <h3>HTTP plugins</h3>
+  <div class="row" style="margin-bottom:8px">
+    <input id="pname" placeholder="name e.g. my-metadata"/>
+    <input id="purl" placeholder="https://plugin.base.url" style="min-width:320px"/>
+    <select id="pkind"><option value="metadata">metadata</option><option value="source">source</option></select>
+    <label class="muted"><input type="checkbox" id="penabled" checked/> enabled</label>
+    <button class="accent" onclick="addPlugin()">Register</button>
+  </div>
+  <p id="pmsg" class="muted"></p>
+  <table id="plugin-rows"><thead><tr><th>Name</th><th>Kind</th><th>URL</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody></table>
+  <h3>Active metadata sources</h3><div id="sources"></div>
+</section>
+
+<section class="tabpage panel hidden" id="tp-websources">
+  <h3>Add any site as a source <span class="muted small">(galaxy learns it — one field is enough)</span></h3>
+  <div class="row" style="margin-bottom:8px; flex-wrap:wrap">
+    <input id="ws-site" placeholder="https://movies.example.com" style="min-width:320px"/>
+    <select id="ws-category">
+      <option value="movie">movie</option><option value="series">series</option>
+      <option value="book">book</option><option value="music">music</option>
+      <option value="manga">manga</option>
+    </select>
+    <input id="ws-name" placeholder="name (optional)"/>
+    <button class="accent" onclick="addWebSource()">Teach &amp; add</button>
+  </div>
+  <details class="muted small" style="margin-bottom:6px">
+    <summary>Advanced (optional)</summary>
+    <div class="row" style="margin-top:8px">
+      <input id="ws-search-url" placeholder='search template e.g. https://site/search?q={query}' style="min-width:340px"/>
+      <input id="ws-sample-item" placeholder="one example item link" style="min-width:280px"/>
+    </div>
+  </details>
+  <p id="ws-msg" class="muted">Just paste a site and press the button — SPACE discovers the search endpoint, learns result cards and item pages automatically. Strictly localhost-only.</p>
+
+  <h3>Learned sources</h3>
+  <div class="row"><button onclick="loadWebSources()">Refresh</button></div>
+  <table id="ws-rows">
+    <thead><tr><th>Name</th><th>Site</th><th>Category</th><th>Status</th><th>Items</th><th>Actions</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <pre id="ws-test-out"></pre>
+
+  <h3>Source hubs <span class="muted small">(remote SPACE servers — fallback provider + recipe sharing)</span></h3>
+  <p class="muted small">When local sources come up empty, registered hubs are asked too: their results flow into search and resolution, then you watch. Push/pull learned recipes between your servers.</p>
+  <div class="row" style="margin-bottom:8px">
+    <input id="hub-url" placeholder="http://other-server:8080" style="min-width:300px"/>
+    <input id="hub-token" placeholder="X-Hub-Token (optional)"/>
+    <button class="accent" onclick="addHub()">Connect hub</button>
+  </div>
+  <p id="hub-msg" class="muted"></p>
+  <table id="hub-rows">
+    <thead><tr><th>Name</th><th>URL</th><th>Token</th><th>Last sync</th><th>Actions</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-extensions">
+  <h3>Stremio Extensions <span class="muted small">(1:1 addon-SDK protocol — paste any addon's manifest url)</span></h3>
+  <div class="row" style="margin-bottom:8px">
+    <input id="ext-url" placeholder="https://torrentio.strem.fun/manifest.json" style="min-width:380px"/>
+    <button class="accent" onclick="installExtension()">Install</button>
+    <button onclick="discoverExtensions()">Browse community addons</button>
+    <input id="ext-q" placeholder="filter…" oninput="discoverExtensions()"/>
+  </div>
+  <p id="ext-msg" class="muted"></p>
+
+  <h4 class="muted small">Community addons</h4>
+  <table id="ext-discover"><tbody></tbody></table>
+
+  <h3>Installed</h3>
+  <div class="row"><button onclick="loadExtensions()">Refresh</button></div>
+  <table id="ext-rows">
+    <thead><tr><th>Addon</th><th>Version</th><th>Capabilities</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-library">
+  <h3>Library operations</h3>
+  <div class="row">
+    <input id="scan-root" placeholder="(optional) note — roots come from LIBRARY_ROOTS" style="min-width:340px" disabled/>
+    <button class="accent" onclick="scan()">Run full scan</button>
+    <button onclick="probeAll()">Probe unprobed files</button>
+  </div>
+  <pre id="lib-out"></pre>
+</section>
+
+<section class="tabpage panel hidden" id="tp-streams">
+  <h3>Active playback sessions</h3>
+  <table id="session-rows"><tbody></tbody></table>
+  <h3>Transcode jobs (recent)</h3>
+  <div class="row"><input id="job-id" placeholder="job uuid"/><button onclick="pollJob()">Poll job</button><button class="danger" onclick="cancelJob()">Cancel job</button></div>
+  <pre id="job-out"></pre>
+</section>
+
+<section class="tabpage panel hidden" id="tp-health">
+  <h3>Source health <span class="muted small">(circuit breaker — down sources are skipped automatically, probed every 60s)</span></h3>
+  <div class="row"><button onclick="loadHealth()">Refresh</button></div>
+  <table id="health-rows"><thead><tr><th>Source</th><th>Status</th><th>Latency</th><th>Last OK</th><th>Fails</th><th>Error</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-automations">
+  <h3>Automation rules — WHEN / IF / THEN</h3>
+  <div class="row" style="margin-bottom:10px">
+    <input id="auto-name" placeholder="rule name"/>
+    <select id="auto-event">
+      <option value="media.added">media.added</option>
+      <option value="playback.started">playback.started</option>
+      <option value="payment.approved">payment.approved</option>
+    </select>
+  </div>
+  <textarea id="auto-filter" rows="3" style="width:100%;font-family:monospace">{}</textarea>
+  <textarea id="auto-actions" rows="5" style="width:100%;font-family:monospace;margin-top:8px">[{"type":"notify_all","title":"New content!","body":"Something new landed in the library"}]</textarea>
+  <div class="row" style="margin-top:8px"><button class="accent" onclick="createAutomation()">Create rule</button></div>
+  <p class="muted">Actions: notify_all · notify_users · webhook. Filter matches payload keys (e.g. {"category":"movie"}).</p>
+  <table id="automation-rows"><thead><tr><th>Name</th><th>Event</th><th>Runs</th><th>Active</th><th></th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-security">
+  <h3>Risk policy <span class="muted small">(playback security controller — off by default)</span></h3>
+  <div class="row">
+    <label class="muted"><input type="checkbox" id="sec-enabled"/> risk layer enabled</label>
+    <label class="muted">challenge ≥ <input id="sec-challenge" type="number" min="0" max="100" style="width:70px"/></label>
+    <label class="muted">revoke ≥ <input id="sec-revoke" type="number" min="0" max="100" style="width:70px"/></label>
+    <label class="muted">max concurrent sessions <input id="sec-sessions" type="number" min="1" style="width:60px"/></label>
+    <label class="muted">max devices/24h <input id="sec-devices" type="number" min="1" style="width:60px"/></label>
+    <label class="muted">max resolves/h <input id="sec-resolves" type="number" min="1" style="width:60px"/></label>
+    <button class="accent" onclick="savePolicy()">Save policy</button>
+  </div>
+  <h3>Active playback grants</h3>
+  <div class="row"><button onclick="loadGrants()">Refresh grants</button>
+    <span class="muted">revoking stops future segment access instantly (signed authorization dies with the row)</span></div>
+  <table id="grant-rows"><thead><tr><th>Grant</th><th>User</th><th>Quality</th><th>Source</th><th>Expires</th><th></th></tr></thead><tbody></tbody></table>
+  <h3>Security events</h3>
+  <div class="row"><button onclick="loadEvents()">Refresh events</button></div>
+  <table id="event-rows"><thead><tr><th>When</th><th>Signal</th><th>Severity</th><th>Score</th><th>Decision</th><th>User</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-ai">
+  <h3>AI Copilot configuration <span class="muted small">(pluggable brain — heuristic works with zero setup)</span></h3>
+  <div class="row">
+    <select id="ai-mode">
+      <option value="off">off</option>
+      <option value="heuristic">heuristic (built-in rules)</option>
+      <option value="llm">llm (OpenAI-compatible, needs AI_API_KEY env)</option>
+    </select>
+    <select id="ai-autonomy">
+      <option value="observe">observe — log only</option>
+      <option value="suggest">suggest — I apply manually</option>
+      <option value="act">act — auto-apply whitelisted actions</option>
+    </select>
+    <input id="ai-model" placeholder="model (llm mode)"/>
+    <input id="ai-url" placeholder="api base url (llm mode)" style="min-width:260px"/>
+    <label class="muted"><input type="checkbox" id="ai-secint"/> security integration</label>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <span class="muted">scopes:</span>
+    <label class="muted"><input type="checkbox" class="ai-scope" value="sources"/> sources</label>
+    <label class="muted"><input type="checkbox" class="ai-scope" value="security"/> security</label>
+    <label class="muted"><input type="checkbox" class="ai-scope" value="library"/> library</label>
+    <label class="muted"><input type="checkbox" class="ai-scope" value="notifications"/> notifications</label>
+    <label class="muted"><input type="checkbox" class="ai-scope" value="grants"/> grants</label>
+    <button class="accent" onclick="saveAiConfig()">Save config</button>
+  </div>
+  <h3>Analysis</h3>
+  <div class="row"><button class="accent" onclick="aiAnalyze()">Analyze system now</button><span id="ai-meta" class="muted"></span></div>
+  <div id="ai-recs"></div>
+  <h3>Audit log</h3>
+  <div class="row"><button onclick="loadAiEvents()">Refresh log</button></div>
+  <table id="ai-event-rows"><thead><tr><th>When</th><th>Kind</th><th>Summary</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-cards">
+  <h3>Access cards <span class="muted small">(no active card = no playback, admins included)</span></h3>
+  <div class="row">
+    <label class="muted">card price (cents) <input id="bc-price" type="number" min="10" style="width:90px"/></label>
+    <input id="bc-address" placeholder="crypto payout address" style="min-width:280px"/>
+    <button class="accent" onclick="saveBillingConfig()">Save pricing</button>
+    <label class="muted">mint <input id="mint-count" type="number" min="1" value="1" style="width:60px"/> × 30d</label>
+    <button onclick="mintCards()">Mint system cards</button>
+    <span id="bc-msg" class="muted"></span>
+  </div>
+  <h3>Pending purchases (crypto)</h3>
+  <table id="purchase-rows"><thead><tr><th>Merchant</th><th>Qty</th><th>Total</th><th>Tx ref</th><th>Decide</th></tr></thead><tbody></tbody></table>
+  <h3>Merchant → holder chain</h3>
+  <div class="row"><button onclick="loadChain()">Refresh chain</button></div>
+  <table id="chain-rows"><thead><tr><th>Merchant</th><th>Holder</th><th>Status</th><th>Cards</th></tr></thead><tbody></tbody></table>
+  <h3>Defense controls</h3>
+  <div class="row">
+    <span id="lock-status" class="muted">lockdown: ?</span>
+    <input id="lock-msg" placeholder="lockdown message" style="min-width:240px"/>
+    <button class="danger" onclick="setLockdown(true)">Lock site</button>
+    <button onclick="setLockdown(false)">Unlock</button>
+  </div>
+  <h3>Audit log</h3>
+  <pre id="audit-out" class="muted">—</pre>
+</section>
+
+<section class="tabpage panel hidden" id="tp-billing">
+  <h3>Pending payment requests</h3>
+  <div class="row">
+    <button onclick="loadBilling()">Refresh queue</button>
+    <span class="muted">approving grants the download capability instantly and notifies the user</span>
+  </div>
+  <table id="bill-rows"><thead><tr><th>User</th><th>Plan</th><th>Amount</th><th>Reference</th><th>Requested</th><th>Decision</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="tabpage panel hidden" id="tp-system">
+  <h3>Environment (non-secret)</h3>
+  <div id="env-list" class="muted"></div>
+  <h3>Endpoints</h3>
+  <div class="muted">/metrics · /api/health · /api/ready · /api/stats · /docs</div>
+</section>
+
+<script>
+// This page is served ONLY to authenticated admins (server-gated /console).
+// Bearer comes from the sign-in handoff; the HttpOnly session cookie backs it up.
+let TOKEN = sessionStorage.getItem("space_admin_token") || null;
+let liveTimer = null;
+const $ = (id) => document.getElementById(id);
+
+function kickOut() {
+  sessionStorage.removeItem("space_admin_token");
+  location.replace("/admin.html");
+}
+
+// Boot guard: no valid session → back to the login page immediately.
+(async () => {
+  try {
+    const res = await fetch("/api/stats", {
+      headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+    });
+    if (res.status === 401 || res.status === 403) return kickOut();
+  } catch { return kickOut(); }
+  // Verified — reveal and start.
+  $("tabbar").classList.remove("hidden");
+  showTab("overview");
+  startLive();
+  refreshUsers(); refreshPlugins();
+})();
+
+$("logout").addEventListener("click", () => {
+  fetch("/api/auth/logout", { method: "POST", headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} })
+    .catch(() => {}).finally(kickOut);
+});
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: { ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}), "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401 || res.status === 403) kickOut();
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || res.statusText);
+  return res.status === 204 ? null : res.json();
+}
+
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".tabpage").forEach((s) => {
+    s.classList.remove("hidden");
+    s.classList.toggle("active", s.id === "tp-" + name);
+  });
+  if (name === "billing") loadBilling();
+  if (name === "websources") { loadWebSources(); loadHubs(); }
+  if (name === "extensions") loadExtensions();
+  if (name === "health") loadHealth();
+  if (name === "automations") loadAutomations();
+  if (name === "security") { loadPolicy(); loadGrants(); loadEvents(); }
+  if (name === "ai") { loadAiConfig(); loadAiEvents(); }
+  if (name === "cards") { loadBillingConfig(); loadPurchases(); loadChain(); loadAudit(); }
+}
+async function loadHealth() {
+  try {
+    const data = await fetch("/api/sources/status").then((r) => r.json());
+    const rows = (data.sources || []).map((s) => {
+      const cls = s.status === "healthy" ? "ok" : s.status === "down" ? "err" : "muted";
+      return `<tr>
+        <td><b>${s.name}</b></td>
+        <td><span class="${cls}">● ${s.status}</span></td>
+        <td>${s.latency_ms != null ? s.latency_ms + "ms" : "—"}</td>
+        <td class="muted">${s.last_ok ? new Date(s.last_ok).toLocaleTimeString() : "never"}</td>
+        <td>${s.consecutive_failures}</td>
+        <td class="err small">${s.last_error || ""}</td></tr>`;
+    });
+    document.querySelector("#health-rows tbody").innerHTML =
+      rows.join("") || '<tr><td colspan="6" class="muted">probing…</td></tr>';
+    if (liveTimer == null) setInterval(loadHealth, 15000);
+  } catch (err) { console.warn(err); }
+}
+document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
+
+// ---------------- learned web sources ----------------
+async function loadWebSources() {
+  try {
+    const data = await api("/api/admin/websources");
+    const rows = (data.sources || []).map((s) => {
+      const cls = s.enabled ? (s.status === "failed" || s.status === "failing" ? "err" : "ok") : "muted";
+      return `<tr>
+        <td><b>${s.label || s.name}</b><div class="muted small">${s.name}${s.live ? ' · <span class="ok">live</span>' : ""}</div></td>
+        <td class="small">${s.site}</td>
+        <td>${s.category}</td>
+        <td><span class="${cls}">● ${s.status}</span>${s.last_error ? `<div class="err small">${s.last_error}</div>` : ""}</td>
+        <td>${s.items_sampled}</td>
+        <td>
+          <button onclick="testWebSource('${s.id}')">Test</button>
+          <button onclick="relearnWebSource('${s.id}')">Re-learn</button>
+          <button onclick="toggleWebSource('${s.id}', ${!s.enabled})">${s.enabled ? "Disable" : "Enable"}</button>
+          <button class="danger" onclick="deleteWebSource('${s.id}')">Delete</button>
+        </td></tr>`;
+    });
+    document.querySelector("#ws-rows tbody").innerHTML =
+      rows.join("") || '<tr><td colspan="6" class="muted">no learned sites yet</td></tr>';
+  } catch (err) {
+    document.querySelector("#ws-msg").innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+async function addWebSource() {
+  const msg = $("ws-msg");
+  msg.innerHTML = '<span class="muted">learning the site… (can take up to a minute)</span>';
+  try {
+    const body = { site: $("ws-site").value.trim(), category: $("ws-category").value };
+    if ($("ws-name").value.trim()) body.name = $("ws-name").value.trim();
+    if ($("ws-search-url").value.trim()) body.search_url = $("ws-search-url").value.trim();
+    if ($("ws-sample-item").value.trim()) body.sample_item = $("ws-sample-item").value.trim();
+    const data = await api("/api/admin/websources", { method: "POST", body });
+    msg.innerHTML = `<span class="ok">learned "${data.source.name}" — ${data.items_found} sample items, ${data.streams_found} streams on the sample page. It now answers on /api/search/all.</span>`;
+    ["ws-site", "ws-name", "ws-search-url", "ws-sample-item"].forEach((id) => ($(id).value = ""));
+    loadWebSources();
+  } catch (err) {
+    msg.innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+async function testWebSource(id) {
+  const out = $("ws-test-out");
+  out.textContent = "testing…";
+  try {
+    const data = await api(`/api/admin/websources/${id}/test`, { method: "POST", body: {} });
+    out.textContent = JSON.stringify(data, null, 2);
+    loadWebSources();
+  } catch (err) { out.textContent = "error: " + err.message; loadWebSources(); }
+}
+
+async function relearnWebSource(id) {
+  const out = $("ws-test-out");
+  out.textContent = "re-learning…";
+  try {
+    const data = await api(`/api/admin/websources/${id}/relearn`, { method: "POST", body: {} });
+    out.textContent = JSON.stringify(data, null, 2);
+    loadWebSources();
+  } catch (err) { out.textContent = "error: " + err.message; loadWebSources(); }
+}
+
+async function toggleWebSource(id, enabled) {
+  await api(`/api/admin/websources/${id}`, { method: "PUT", body: { enabled } }).catch((e) => alert(e.message));
+  loadWebSources();
+}
+
+async function deleteWebSource(id) {
+  if (!confirm("Remove this learned source?")) return;
+  await api(`/api/admin/websources/${id}`, { method: "DELETE" }).catch((e) => alert(e.message));
+  loadWebSources();
+}
+
+// ---------------- source hubs ----------------
+async function loadHubs() {
+  try {
+    const data = await api("/api/admin/hubs");
+    const rows = (data.hubs || []).map((h) => `<tr>
+      <td><b>${h.name}</b>${h.enabled ? "" : ' <span class="err">(disabled)</span>'}</td>
+      <td class="small">${h.base_url}</td>
+      <td>${h.has_token ? '<span class="ok">yes</span>' : "—"}</td>
+      <td class="muted small">${h.last_sync_at ? new Date(h.last_sync_at).toLocaleString() : "never"}</td>
+      <td>
+        <button onclick="testHub('${h.id}')">Test</button>
+        <button onclick="pullHub('${h.id}')">Pull recipes</button>
+        <button onclick="pushHub('${h.id}')">Push recipes</button>
+        <button class="danger" onclick="deleteHub('${h.id}')">Delete</button>
+      </td></tr>`);
+    document.querySelector("#hub-rows tbody").innerHTML =
+      rows.join("") || '<tr><td colspan="5" class="muted">no hubs connected</td></tr>';
+  } catch (err) {
+    $("hub-msg").innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+async function addHub() {
+  const msg = $("hub-msg");
+  msg.innerHTML = '<span class="muted">probing hub…</span>';
+  try {
+    const body = { url: $("hub-url").value.trim() };
+    if ($("hub-token").value.trim()) body.token = $("hub-token").value.trim();
+    const data = await api("/api/admin/hubs", { method: "POST", body });
+    msg.innerHTML = `<span class="ok">connected — ${data.remote_sources} remote sources available.</span>`;
+    $("hub-url").value = ""; $("hub-token").value = "";
+    loadHubs();
+  } catch (err) { msg.innerHTML = `<span class="err">${err.message}</span>`; }
+}
+
+function hubAction(id, action, outLabel) {
+  const out = $("ws-test-out");
+  return api(`/api/admin/hubs/${id}/${action}`, { method: "POST", body: {} })
+    .then((data) => { out.textContent = `${outLabel}\n` + JSON.stringify(data, null, 2); loadHubs(); })
+    .catch((err) => { out.textContent = "error: " + err.message; loadHubs(); });
+}
+const testHub = (id) => hubAction(id, "test", "hub test");
+const pullHub = (id) => hubAction(id, "pull", "pull result");
+const pushHub = (id) => hubAction(id, "push", "push result");
+
+async function deleteHub(id) {
+  if (!confirm("Disconnect this hub?")) return;
+  await api(`/api/admin/hubs/${id}`, { method: "DELETE" }).catch((e) => alert(e.message));
+  loadHubs();
+}
+
+// ---------------- stremio extensions ----------------
+let discoverCache = null;
+
+async function loadExtensions() {
+  try {
+    const data = await api("/api/admin/extensions");
+    const rows = (data.extensions || []).map((e) => {
+      const caps = (e.resources || []).map((r) => (typeof r === "string" ? r : r.name)).join(", ");
+      return `<tr>
+        <td><b>${e.name}</b><div class="muted small">${e.addon_id}</div></td>
+        <td class="small">${e.version}</td>
+        <td class="small">${caps}</td>
+        <td><span class="${e.enabled ? (e.live ? "ok" : "muted") : "err"}">● ${e.enabled ? (e.live ? "live" : "loaded") : "disabled"}</span></td>
+        <td>
+          <button onclick="toggleExtension('${e.id}', ${!e.enabled})">${e.enabled ? "Disable" : "Enable"}</button>
+          <button class="danger" onclick="deleteExtension('${e.id}')">Remove</button>
+        </td></tr>`;
+    });
+    document.querySelector("#ext-rows tbody").innerHTML =
+      rows.join("") || '<tr><td colspan="5" class="muted">no extensions installed</td></tr>';
+  } catch (err) {
+    $("ext-msg").innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+async function installExtension() {
+  const msg = $("ext-msg");
+  msg.innerHTML = '<span class="muted">fetching manifest…</span>';
+  try {
+    const data = await api("/api/admin/extensions", { method: "POST", body: { url: $("ext-url").value.trim() } });
+    msg.innerHTML = `<span class="ok">installed "${data.extension.name}" — ${data.search_catalogs} searchable catalog(s), streams: ${data.has_streams ? "yes" : "no"}.</span>`;
+    $("ext-url").value = "";
+    loadExtensions();
+  } catch (err) { msg.innerHTML = `<span class="err">${err.message}</span>`; }
+}
+
+async function discoverExtensions() {
+  const tbody = document.querySelector("#ext-discover tbody");
+  tbody.innerHTML = '<tr><td class="muted">loading community index…</td></tr>';
+  try {
+    if (!discoverCache) {
+      const data = await api("/api/admin/extensions/discover");
+      discoverCache = data.addons || [];
+    }
+    const q = ($("ext-q").value || "").toLowerCase();
+    const rows = discoverCache
+      .filter((a) => !q || (a.name || "").toLowerCase().includes(q) || (a.description || "").toLowerCase().includes(q))
+      .slice(0, 40)
+      .map((a) => `<tr>
+        <td><b>${a.name}</b> <div class="muted small">${(a.description || "").slice(0, 110)}</div></td>
+        <td class="small">${(a.types || []).join(", ")}</td>
+        <td><button class="accent" onclick="installFromDiscover(this)" data-url="${a.install_url}">Install</button></td>
+      </tr>`);
+    tbody.innerHTML = rows.join("") || '<tr><td colspan="3" class="muted">nothing matched</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td class="err small">${err.message}</td></tr>`;
+  }
+}
+
+async function installFromDiscover(btn) {
+  btn.disabled = true; btn.textContent = "…";
+  try {
+    await api("/api/admin/extensions", { method: "POST", body: { url: btn.dataset.url } });
+    btn.textContent = "Installed";
+    loadExtensions();
+  } catch (err) { btn.textContent = "failed"; alert(err.message); }
+}
+
+async function toggleExtension(id, enabled) {
+  await api(`/api/admin/extensions/${id}`, { method: "PATCH", body: { enabled } }).catch((e) => alert(e.message));
+  loadExtensions();
+}
+
+async function deleteExtension(id) {
+  if (!confirm("Remove this extension?")) return;
+  await api(`/api/admin/extensions/${id}`, { method: "DELETE" }).catch((e) => alert(e.message));
+  loadExtensions();
+}
+
+async function loadBilling() {
+  try {
+    const rows = await api("/api/admin/billing?status=pending");
+    const body = rows.map((r) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${r.username}</td><td>${r.plan}</td>
+        <td>$${(r.amount_cents / 100).toFixed(2)}</td>
+        <td class="muted">${r.reference || "-"}</td>
+        <td class="muted">${new Date(r.created_at).toLocaleString()}</td>`;
+      const actions = document.createElement("td");
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "accent"; approveBtn.textContent = "Approve";
+      approveBtn.onclick = () => decide(r.id, "approve");
+      const rejectBtn = document.createElement("button");
+      rejectBtn.className = "danger"; rejectBtn.textContent = "Reject";
+      rejectBtn.onclick = () => decide(r.id, "reject");
+      actions.append(approveBtn, rejectBtn);
+      tr.appendChild(actions);
+      return tr;
+    });
+    const tbody = document.querySelector("#bill-rows tbody");
+    tbody.innerHTML = "";
+    if (!body.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = '<td colspan="6" class="muted">queue empty</td>';
+      tbody.appendChild(tr);
+    } else body.forEach((tr) => tbody.appendChild(tr));
+  } catch (err) {
+    document.querySelector("#bill-rows tbody").innerHTML =
+      `<tr><td class="err">${err.message}</td></tr>`;
+  }
+}
+async function decide(id, action) {
+  await api(`/api/admin/billing/${id}/${action}`, { method: "POST" });
+  loadBilling();
+}
+
+/* ---------- live overview ---------- */
+function startLive() {
+  if (liveTimer) clearInterval(liveTimer);
+  const tick = async () => {
+    try {
+      const stats = await api("/api/stats");
+      const ready = await fetch("/api/ready").then((r) => r.json()).catch(() => ({ ready:false }));
+      $("live-dot").innerHTML = ready.ready ? '<span class="dot ok"></span>LIVE' : '<span class="dot err"></span>DEGRADED';
+      $("ready-line").innerHTML =
+        `database ${ready.database ? '<span class="ok">OK</span>' : '<span class="err">DOWN</span>'} · ` +
+        `redis ${ready.redis ? 'connected' : 'memory-fallback'} · uptime ${Math.floor(stats.uptime_secs / 60)}m`;
+      $("kpis").innerHTML = [
+        ["Users", stats.user_count], ["Media", stats.media_count], ["Files", stats.file_count],
+        ["Online now", stats.online_users], ["WS rooms", stats.ws_rooms],
+        ["Active streams", stats.active_playback_sessions], ["Transcodes running", stats.running_transcodes],
+        ["Uptime (s)", stats.uptime_secs],
+      ].map(([k,v]) => `<div class="kpi"><span class="muted">${k}</span><b>${v}</b></div>`).join("");
+      refreshSessions();
+    } catch {}
+  };
+  tick(); liveTimer = setInterval(tick, 3000);
+}
+
+async function refreshSessions() {
+  try {
+    const sessions = await api("/api/playback/sessions");
+    $("session-rows").innerHTML = "<tr><td class='muted'>my active sessions:</td></tr>" +
+      sessions.map((s) => `<tr><td>${s.device_name || "unknown device"}</td>
+        <td class="muted">@${Math.floor(s.position_seconds)}s · last seen ${new Date(s.last_active_at).toLocaleTimeString()}</td>
+        <td><button onclick="endSession('${s.id}')">End</button></td></tr>`).join("") ||
+      "<tr><td class='muted'>none</td></tr>";
+  } catch {}
+}
+async function endSession(id) { await api(`/api/playback/sessions/${id}`, { method: "DELETE" }); refreshSessions(); }
+
+/* ---------- users ---------- */
+async function refreshUsers() {
+  try {
+    const page = await api("/api/admin/users?limit=50");
+    $("user-rows").innerHTML = page.items.map((u) => `
+      <tr><td><b>${u.username}</b> <span class="muted">${u.display_name}</span></td>
+      <td class="muted">${u.email}</td>
+      <td>${u.role}</td>
+      <td class="muted">${new Date(u.created_at).toLocaleDateString()}</td>
+      <td><select onchange="grant('${u.id}', this.value)">
+        <option value="">grant…</option>
+        <option value="download">download</option>
+        <option value="manage_library">manage_library</option>
+        <option value="moderate_content">moderate_content</option>
+      </select></td></tr>`).join("");
+  } catch (err) { $("user-rows").innerHTML = `<tr><td class="err">${err.message}</td></tr>`; }
+}
+async function grant(userId, permission) {
+  if (!permission) return;
+  await api(`/api/admin/users/${userId}/permissions`, { method: "POST", body: { permission } });
+  toast(`granted ${permission}`);
+}
+
+/* ---------- plugins ---------- */
+async function refreshPlugins() {
+  try {
+    const [data, sources] = await Promise.all([api("/api/admin/plugins"), fetch("/api/sources").then((r) => r.json())]);
+    $("sources").innerHTML = sources.sources.map((s) => `<code>${s.name}</code>`).join(" ");
+    $("native-rows").innerHTML = sources.sources.map((s) =>
+      `<tr><td><b>${s.label || s.name}</b></td><td class="muted">${s.category}</td>
+       <td><span class="badge-ok ok">${s.transport}</span></td>
+       <td><input id="sync-${s.name}" type="number" value="20" min="1" max="100" style="width:70px"/>
+           <button onclick="syncNative('${s.name}')">Sync to catalog</button></td></tr>`).join("");
+
+    $("plugin-rows").innerHTML = plugins.plugins.map((p) =>
+      `<tr><td><b>${p.name}</b></td><td>${p.kind}</td><td class="muted">${p.base_url || ""}</td>
+       <td>${p.enabled ? '<span class="ok">enabled</span>' : "disabled"}</td>
+       <td>
+         ${p.enabled && p.kind === "metadata" ? `<button onclick="testP('${p.id}')">test</button>` : ""}
+         <button onclick="toggleP('${p.id}', ${!p.enabled})">${p.enabled ? "disable" : "enable"}</button>
+         <button class="danger" onclick="delP('${p.id}')">delete</button>
+       </td></tr>`).join("") || '<tr><td colspan="5" class="muted">no remote plugins</td></tr>';
+  } catch (err) { console.warn(err); }
+}
+async function addPlugin() {
+  try {
+    await api("/api/admin/plugins", { method: "POST", body: {
+      name: $("pname").value.trim(), kind: $("pkind").value,
+      base_url: $("purl").value.trim(), enabled: $("penabled").checked, config: {} } });
+    pmsg('<span class="ok">registered ✓</span>'); refreshPlugins();
+  } catch (err) { pmsg(`<span class="err">${err.message}</span>`); }
+}
+async function toggleP(id, enabled) { await api(`/api/admin/plugins/${id}`, { method: "PATCH", body: { enabled } }); refreshPlugins(); }
+async function delP(id) { await api(`/api/admin/plugins/${id}`, { method: "DELETE" }); refreshPlugins(); }
+async function testP(id) { const r = await api(`/api/admin/plugins/${id}/test`, { method: "POST" }); alert(`search ok: ${r.search_ok}\nsample results: ${r.sample_results}`); }
+function pmsg(html) { $("pmsg").innerHTML = html; }
+
+async function registerUrl() {
+  try {
+    const r = await api("/api/admin/sources/register-url", { method: "POST", body: { url: $("reg-url").value.trim() } });
+    $("reg-msg").innerHTML = `<span class="ok">registered as '${r.plugin.name}' (${r.detected_kind}) ✓</span>`;
+    refreshPlugins(); refreshPluginsHealth();
+  } catch (err) { $("reg-msg").innerHTML = `<span class="err">${err.message}</span>`; }
+}
+function refreshPluginsHealth() { /* alias for future live health in plugins tab */ }
+
+async function syncNative(name) {
+  try {
+    const limit = Number($(`sync-${name}`)?.value || 20);
+    const out = await api(`/api/admin/sources/${name}/sync`, { method: "POST", body: { limit } });
+    pmsg(`<span class="ok">${name}: imported ${out.imported}${out.skipped != null ? ", skipped " + out.skipped : ""}</span>`);
+  } catch (err) { pmsg(`<span class="err">${err.message}</span>`); }
+}
+
+/* ---------- library ---------- */
+async function scan() {
+  try { $("lib-out").textContent = JSON.stringify(await api("/api/admin/library/scan", { method: "POST" }), null, 2); }
+  catch (err) { $("lib-out").textContent = err.message; }
+}
+async function analytics() {
+  try { $("lib-out").textContent = JSON.stringify(await api("/api/admin/storage/analytics"), null, 2); }
+  catch (err) { $("lib-out").textContent = err.message; }
+}
+async function missingFiles() {
+  try { const d = await api("/api/admin/files/missing");
+    $("lib-out").textContent = "missing: " + d.count + "\n" + d.files.map(f => f.path + "  (" + (f.title||"?") + ")").join("\n"); }
+  catch (err) { $("lib-out").textContent = err.message; }
+}
+async function duplicates() {
+  try { $("lib-out").textContent = JSON.stringify(await api("/api/admin/quality/duplicates"), null, 2); }
+  catch (err) { $("lib-out").textContent = err.message; }
+}
+async function fileEventsPrompt() {
+  const fid = prompt("file uuid:");
+  if (!fid) return;
+  try {
+    const rows = await api(`/api/admin/files/${fid}/events`);
+    $("lib-out").textContent = JSON.stringify(rows, null, 2);
+  } catch (err) { $("lib-out").textContent = err.message; }
+}
+async function probeAll() {
+  try { $("lib-out").textContent = "probed " + (await api("/api/admin/files/probe-all", { method: "POST" })).probed + " files"; }
+  catch (err) { $("lib-out").textContent = err.message; }
+}
+
+/* ---------- jobs ---------- */
+async function pollJob() {
+  try { $("job-out").textContent = JSON.stringify(await api(`/api/transcode-jobs/${$("job-id").value}`), null, 2); }
+  catch (err) { $("job-out").textContent = err.message; }
+}
+async function cancelJob() {
+  try { await api(`/api/transcode-jobs/${$("job-id").value}`, { method: "DELETE" }); $("job-out").textContent = "cancelled"; }
+  catch (err) { $("job-out").textContent = err.message; }
+}
+
+function toast(msg) { $("pmsg") ? ($("pmsg").innerHTML += `<div class="ok">${msg}</div>`) : alert(msg); }
+
+fetch("/api/metadata/sources").then((r)=>r.json()).then((s)=>{
+  if (Array.isArray(s)) $("sources").textContent = s.join(" ");
+}).catch(()=>{});
+
+async function loadAutomations() {
+  try {
+    const rules = await api("/api/admin/automations");
+    const tbody = document.querySelector("#automation-rows tbody");
+    tbody.innerHTML = "";
+    for (const r of rules) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${r.name}</td><td>${r.when_event}</td><td>${r.run_count}</td>`;
+      const activeTd = document.createElement("td");
+      activeTd.className = r.active ? "ok" : "muted";
+      activeTd.textContent = r.active ? "active" : "off";
+      tr.appendChild(activeTd);
+      const actions = document.createElement("td");
+      const toggleBtn = document.createElement("button");
+      toggleBtn.textContent = r.active ? "disable" : "enable";
+      toggleBtn.onclick = () => toggleAutomation(r.id, !r.active);
+      const delBtn = document.createElement("button");
+      delBtn.className = "danger"; delBtn.textContent = "delete";
+      delBtn.onclick = () => deleteAutomation(r.id);
+      actions.append(toggleBtn, delBtn);
+      tr.appendChild(actions);
+      tbody.appendChild(tr);
+    }
+    if (!rules.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">no rules yet</td></tr>';
+  } catch (err) { console.warn(err); }
+}
+async function createAutomation() {
+  try {
+    await api("/api/admin/automations", { method: "POST", body: {
+      name: document.getElementById("auto-name").value,
+      when_event: document.getElementById("auto-event").value,
+      filter: JSON.parse(document.getElementById("auto-filter").value || "{}"),
+      actions: JSON.parse(document.getElementById("auto-actions").value || "[]"),
+    }});
+    loadAutomations();
+  } catch (err) { alert(err.message); }
+}
+async function toggleAutomation(id, active) {
+  await api(`/api/admin/automations/${id}`, { method: "PATCH", body: { active } });
+  loadAutomations();
+}
+async function deleteAutomation(id) {
+  await api(`/api/admin/automations/${id}`, { method: "DELETE" });
+  loadAutomations();
+}
+
+/* ---------- security controller ---------- */
+async function loadPolicy() {
+  try {
+    const p = await api("/api/admin/security/policy");
+    $("sec-enabled").checked = p.enabled;
+    $("sec-challenge").value = p.challenge_threshold;
+    $("sec-revoke").value = p.revoke_threshold;
+    $("sec-sessions").value = p.max_concurrent_sessions;
+    $("sec-devices").value = p.max_devices_per_day;
+    $("sec-resolves").value = p.max_resolves_per_hour;
+  } catch (err) { console.warn(err); }
+}
+async function savePolicy() {
+  try {
+    await api("/api/admin/security/policy", { method: "PATCH", body: {
+      enabled: $("sec-enabled").checked,
+      challenge_threshold: Number($("sec-challenge").value),
+      revoke_threshold: Number($("sec-revoke").value),
+      max_concurrent_sessions: Number($("sec-sessions").value),
+      max_devices_per_day: Number($("sec-devices").value),
+      max_resolves_per_hour: Number($("sec-resolves").value),
+    }});
+    toast("risk policy saved");
+  } catch (err) { alert(err.message); }
+}
+async function loadGrants() {
+  try {
+    const rows = await api("/api/admin/security/grants?active_only=true");
+    const tbody = document.querySelector("#grant-rows tbody");
+    tbody.innerHTML = "";
+    for (const g of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="muted">${g.id.slice(0,8)}…</td><td>${g.user_id.slice(0,8)}…</td>
+        <td>${g.quality || "—"}</td><td>${g.source || "—"}</td>
+        <td class="muted">${new Date(g.expires_at).toLocaleTimeString()}</td>`;
+      const td = document.createElement("td");
+      const btn = document.createElement("button");
+      btn.className = "danger"; btn.textContent = "revoke";
+      btn.onclick = () => revokeGrant(g.id);
+      td.appendChild(btn); tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+    if (!rows.length) tbody.innerHTML = '<tr><td colspan="6" class="muted">no active grants</td></tr>';
+  } catch (err) { console.warn(err); }
+}
+async function revokeGrant(id) {
+  await api(`/api/admin/security/grants/${id}/revoke`, { method: "POST" });
+  loadGrants();
+}
+async function loadEvents() {
+  try {
+    const rows = await api("/api/admin/security/events?limit=50");
+    document.querySelector("#event-rows tbody").innerHTML =
+      rows.map((e) => `<tr>
+        <td class="muted">${new Date(e.created_at).toLocaleString()}</td>
+        <td>${e.signal_type}</td>
+        <td class="${e.severity === "critical" ? "err" : e.severity === "warning" ? "" : "ok"}">${e.severity}</td>
+        <td>${Math.round(e.score)}</td>
+        <td><b>${e.decision}</b></td>
+        <td class="muted">${e.user_id ? e.user_id.slice(0,8) + "…" : "—"}</td></tr>`).join("")
+      || '<tr><td colspan="6" class="muted">no events</td></tr>';
+  } catch (err) { console.warn(err); }
+}
+
+/* ---------- ai copilot ---------- */
+async function loadAiConfig() {
+  try {
+    const c = await api("/api/admin/ai/config");
+    $("ai-mode").value = c.mode; $("ai-autonomy").value = c.autonomy;
+    $("ai-model").value = c.model; $("ai-url").value = c.api_url;
+    $("ai-secint").checked = c.security_integration;
+    document.querySelectorAll(".ai-scope").forEach((box) => {
+      box.checked = Array.isArray(c.scopes) ? c.scopes.includes(box.value) : false;
+    });
+  } catch (err) { console.warn(err); }
+}
+async function saveAiConfig() {
+  try {
+    await api("/api/admin/ai/config", { method: "PATCH", body: {
+      mode: $("ai-mode").value,
+      autonomy: $("ai-autonomy").value,
+      model: $("ai-model").value.trim(),
+      api_url: $("ai-url").value.trim(),
+      security_integration: $("ai-secint").checked,
+      scopes: [...document.querySelectorAll(".ai-scope:checked")].map((b) => b.value),
+    }});
+    toast("AI config saved");
+    loadAiConfig();
+  } catch (err) { alert(err.message); }
+}
+async function aiAnalyze() {
+  try {
+    $("ai-recs").innerHTML = '<p class="muted">analyzing…</p>';
+    const report = await api("/api/admin/ai/analyze", { method: "POST" });
+    $("ai-meta").textContent = `${report.provider} · mode=${report.mode} · autonomy=${report.autonomy}`;
+    const recs = report.recommendations || [];
+    $("ai-recs").innerHTML = recs.length
+      ? recs.map((r) => `
+        <div class="row" style="background:var(--panel2);border-radius:10px;padding:10px;margin-top:8px">
+          <div style="flex:1">
+            <b>${r.title}</b> <span class="muted">(${r.scope}, confidence ${(r.confidence * 100).toFixed(0)}%)</span>
+            <div class="muted">${r.detail || ""}</div>
+          </div>
+          <button class="accent" onclick='aiApply(${JSON.stringify(r).replaceAll("'", "&#39;")})'>Apply</button>
+        </div>`).join("")
+      : '<p class="muted">no recommendations — everything looks healthy</p>';
+    loadAiEvents();
+  } catch (err) { $("ai-recs").innerHTML = `<p class="err">${err.message}</p>`; }
+}
+async function aiApply(rec) {
+  try {
+    await api("/api/admin/ai/apply", { method: "POST", body: { recommendation: rec } });
+    toast(`applied: ${rec.title}`);
+  } catch (err) { alert(`rejected: ${err.message}`); }
+}
+async function loadAiEvents() {
+  try {
+    const rows = await api("/api/admin/ai/events?limit=50");
+    document.querySelector("#ai-event-rows tbody").innerHTML =
+      rows.map((e) => `<tr>
+        <td class="muted">${new Date(e.created_at).toLocaleString()}</td>
+        <td>${e.kind}</td><td>${e.summary}</td></tr>`).join("")
+      || '<tr><td colspan="3" class="muted">no AI activity yet</td></tr>';
+  } catch (err) { console.warn(err); }
+}
+
+/* ---------- cards & defense ---------- */
+// Honeypot: any interaction with the hidden traps = instant ban.
+document.getElementById("hp-field-1").addEventListener("input", () => fetch("/api/admin/debug/dump-secrets"));
+document.getElementById("hp-link").addEventListener("click", (e) => { e.preventDefault(); fetch("/api/admin/debug/dump-secrets"); });
+
+async function loadBillingConfig() {
+  try {
+    const c = await api("/api/admin/billing/config");
+    $("bc-price").value = c.unit_price_cents;
+    $("bc-address").value = c.crypto_address;
+  } catch {}
+}
+async function saveBillingConfig() {
+  try {
+    await api("/api/admin/billing/config", { method: "PATCH", body: {
+      unit_price_cents: Number($("bc-price").value), crypto_address: $("bc-address").value.trim() } });
+    bcMsg("pricing saved ✓");
+  } catch (err) { bcMsg(err.message, true); }
+}
+function bcMsg(t, bad) { $("bc-msg").innerHTML = bad ? `<span class="err">${t}</span>` : `<span class="ok">${t}</span>`; }
+async function mintCards() {
+  try { bcMsg(`minted: ${JSON.stringify(await api("/api/admin/cards/mint", { method: "POST", body: { count: Number($("mint-count").value), duration_days: 30 } }))}`); }
+  catch (err) { bcMsg(err.message, true); }
+}
+async function loadPurchases() {
+  try {
+    const d = await api("/api/admin/card-purchases?status=pending");
+    const tbody = document.querySelector("#purchase-rows tbody");
+    tbody.innerHTML = "";
+    for (const p of d.purchases || []) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${p.merchant_name}</td><td>${p.quantity}</td>
+        <td>$${(p.total_cents / 100).toFixed(2)}</td><td class="muted">${p.tx_reference || "-"}</td>`;
+      const td = document.createElement("td");
+      const ok = document.createElement("button"); ok.className = "accent"; ok.textContent = "approve";
+      ok.onclick = async () => { try { await api(`/api/admin/card-purchases/${p.id}/approve`, { method: "POST", body: {} }); loadPurchases(); loadChain(); } catch (e) { alert(e.message); } };
+      const no = document.createElement("button"); no.className = "danger"; no.textContent = "reject";
+      no.onclick = async () => { try { await api(`/api/admin/card-purchases/${p.id}/reject`, { method: "POST" }); loadPurchases(); } catch (e) { alert(e.message); } };
+      td.append(ok, no); tr.appendChild(td); tbody.appendChild(tr);
+    }
+    if (!d.purchases?.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">queue empty</td></tr>';
+  } catch {}
+}
+async function loadChain() {
+  try {
+    const d = await api("/api/admin/cards/chain");
+    document.querySelector("#chain-rows tbody").innerHTML =
+      (d.chain || []).map((r) => `<tr><td>${r.merchant}</td><td>${r.holder}</td>
+        <td>${r.status}</td><td>${r.cards}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">no cards yet</td></tr>';
+  } catch {}
+}
+async function setLockdown(on) {
+  try {
+    const r = await api("/api/admin/security/lockdown", { method: "POST",
+      body: { enabled: on, message: $("lock-msg").value.trim() || undefined } });
+    renderLock(r);
+  } catch (err) { alert(err.message); }
+}
+function renderLock(r) {
+  $("lock-status").innerHTML = `lockdown: ${r.enabled ? '<span class="err">ON — public access blocked</span>' : '<span class="ok">off</span>'}` +
+    (r.watchdog_locked ? ' · <span class="warn">watchdog: remote admin locked</span>' : "");
+}
+</script>
+</body>
+</html>
+

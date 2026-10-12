@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SPACE · Admin Sign-in</title>
+<style>
+  :root { --bg:#0b0e14; --panel:#131826; --panel2:#1a2032; --text:#e8ecf4; --muted:#8b93a7; --accent:#6c8cff; --ok:#43d9a3; --err:#ff5c74; }
+  * { box-sizing:border-box }
+  body { background:var(--bg); color:var(--text); font-family:Inter,'Segoe UI',system-ui,sans-serif;
+         display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0 }
+  .box { background:var(--panel); border-radius:14px; padding:34px 38px; width:min(420px,92vw) }
+  h1 { letter-spacing:3px; font-size:22px; margin:0 0 4px } h1 span { color:var(--accent); letter-spacing:1px }
+  .muted { color:var(--muted); font-size:12.5px }
+  input { width:100%; background:var(--panel2); color:var(--text); border:1px solid #273049;
+          border-radius:9px; padding:11px 13px; margin-top:10px; font-size:14px }
+  button { width:100%; background:var(--accent); color:#08101f; font-weight:700; border:none;
+           border-radius:9px; padding:12px; margin-top:16px; cursor:pointer; font-size:14px }
+  #msg { min-height:20px; margin-top:12px }
+  .ok { color:var(--ok) } .err { color:var(--err) }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>SPACE <span>· admin</span></h1>
+  <p class="muted">Authentication required. The console is served only after a verified admin session.</p>
+
+  <form onsubmit="return doLogin(event)">
+    <input id="identifier" placeholder="admin email or username" autocomplete="username"/>
+    <input id="password" type="password" placeholder="password" autocomplete="current-password"/>
+    <input id="totp" type="text" inputmode="numeric" maxlength="6" placeholder="2FA code (if enabled)" autocomplete="one-time-code"/>
+    <!-- HONEYPOT: invisible to humans. Autofill bots that touch it are banned server-side. -->
+    <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px">
+      <label>Confirm secret dump
+        <input name="confirm_secret_dump" id="hp-field-1" tabindex="-1" autocomplete="off"/>
+      </label>
+      <a href="/api/admin/debug/dump-secrets" id="hp-link">internal: dump signing secrets</a>
+    </div>
+    <button type="submit">Sign in</button>
+  </form>
+  <div id="msg"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// Honeypot wiring — any touch reports straight to the watchdog.
+$("hp-field-1").addEventListener("input", () => fetch("/api/admin/debug/dump-secrets"));
+$("hp-link").addEventListener("click", (e) => { e.preventDefault(); fetch("/api/admin/debug/dump-secrets"); });
+
+// Already holding a live admin session? Straight through.
+fetch("/api/stats").then((r) => {
+  if (r.ok) location.replace("/console");
+});
+
+async function doLogin(ev) {
+  ev.preventDefault();
+  $("msg").innerHTML = '<span class="muted">verifying…</span>';
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: $("identifier").value,
+        password: $("password").value,
+        totp_code: $("totp").value.trim() || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $("msg").innerHTML = `<span class="err">${data.message || res.statusText}</span>`;
+      return false;
+    }
+    if (!["admin", "moderator"].includes(data.user.role)) {
+      $("msg").innerHTML = '<span class="err">admin role required</span>';
+      return false;
+    }
+    // Session cookie is already set (HttpOnly). Keep the bearer for API calls.
+    sessionStorage.setItem("space_admin_token", data.access_token);
+    $("msg").innerHTML = '<span class="ok">verified — opening console…</span>';
+    location.replace("/console");
+  } catch (err) {
+    $("msg").innerHTML = `<span class="err">${err.message}</span>`;
+  }
+  return false;
+}
+</script>
+</body>
+</html>

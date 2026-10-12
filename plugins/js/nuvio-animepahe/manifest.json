@@ -1,0 +1,10 @@
+{
+  "id": "nuvio-animepahe",
+  "name": "AnimePahe",
+  "version": "1.0.1",
+  "author": "Nuvio Team",
+  "description": "AnimePahe (sub/dub). Unmodified Nuvio provider, running on SPACE's script plugin runtime.",
+  "supportedTypes": ["movie", "tv"],
+  "filename": "provider.js",
+  "enabled": true
+}

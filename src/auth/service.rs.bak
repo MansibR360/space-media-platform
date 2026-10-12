@@ -1,0 +1,764 @@
+use std::collections::HashSet;
+
+use crate::auth::password;
+use crate::auth::permissions::Permission;
+use crate::error::{ApiError, ApiResult};
+use crate::users::models::User;
+use crate::utils::{new_id, random_hex, sha256_hex, validate_email, validate_username};
+use chrono::{Duration, Utc};
+
+use sqlx::PgPool;
+use std::sync::Arc;
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct SessionTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub access_ttl_secs: i64,
+}
+
+#[derive(Debug)]
+pub struct SessionContext {
+    pub user: User,
+    pub session_id: Uuid,
+    pub permissions: HashSet<Permission>,
+}
+
+#[derive(Debug, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct SessionInfo {
+    pub id: Uuid,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub last_used_at: chrono::DateTime<Utc>,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub current: bool,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct SessionRow {
+    session_id: Uuid,
+    #[allow(dead_code)]
+    token_hash: String,
+    #[allow(dead_code)]
+    refresh_token_hash: String,
+    expires_at: chrono::DateTime<Utc>,
+    refresh_expires_at: chrono::DateTime<Utc>,
+    #[allow(dead_code)]
+    revoked_at: Option<chrono::DateTime<Utc>>,
+    last_used_at: chrono::DateTime<Utc>,
+    #[sqlx(flatten)]
+    user: User,
+}
+
+#[derive(Clone)]
+pub struct AuthService {
+    pool: PgPool,
+    cfg: Arc<crate::config::Config>,
+}
+
+const SESSION_COLS: &str = "s.id AS session_id, s.token_hash, s.refresh_token_hash, s.expires_at, \
+     s.refresh_expires_at, s.revoked_at, s.last_used_at";
+
+fn user_error(message: &str) -> ApiError {
+    ApiError::Validation(message.to_string())
+}
+
+impl AuthService {
+    pub fn new(pool: PgPool, cfg: Arc<crate::config::Config>) -> Self {
+        Self { pool, cfg }
+    }
+
+    fn ttl(&self) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
+        let now = Utc::now();
+        (
+            now + Duration::seconds(self.cfg.access_ttl.as_secs() as i64),
+            now + Duration::seconds(self.cfg.refresh_ttl.as_secs() as i64),
+        )
+    }
+
+    pub async fn register(
+        &self,
+        req: &crate::auth::handlers::RegisterRequest,
+        ip: &str,
+        ua: &str,
+    ) -> ApiResult<(User, SessionTokens)> {
+        if !validate_username(&req.username) {
+            return Err(user_error(
+                "username must be 3-32 chars of letters, digits, dot, dash or underscore",
+            ));
+        }
+        if !validate_email(&req.email) {
+            return Err(user_error("email address is not valid"));
+        }
+        if !crate::auth::password::password_meets_policy(
+            &req.password,
+            self.cfg.password_min_length,
+        ) {
+            return Err(user_error(&format!(
+                "password must be at least {} characters and mix letters with digits",
+                self.cfg.password_min_length
+            )));
+        }
+
+        if crate::users::repo::find_by_email(&self.pool, &req.email)
+            .await?
+            .is_some()
+        {
+            return Err(ApiError::Conflict("email already registered".into()));
+        }
+        if crate::users::repo::find_by_username(&self.pool, &req.username)
+            .await?
+            .is_some()
+        {
+            return Err(ApiError::Conflict("username already taken".into()));
+        }
+
+        let salt = password::new_salt();
+        let hash = password::hash_password(&req.password, &salt)?;
+        let display_name = req
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&req.username)
+            .to_string();
+
+        let user = crate::users::repo::insert(
+            &self.pool,
+            crate::users::repo::NewUser {
+                id: new_id(),
+                username: &req.username,
+                email: &req.email,
+                display_name: &display_name,
+                password_hash: &hash,
+                role: crate::users::models::Role::User,
+            },
+        )
+        .await?;
+
+        let tokens = self.create_session(user.id, ip, ua).await?;
+        Ok((user, tokens))
+    }
+
+    pub async fn login(
+        &self,
+        req: &crate::auth::handlers::LoginRequest,
+        ip: &str,
+        ua: &str,
+    ) -> ApiResult<(User, SessionTokens)> {
+        let user = crate::users::repo::find_by_email(&self.pool, &req.identifier)
+            .await?
+            .or(crate::users::repo::find_by_username(&self.pool, &req.identifier).await?)
+            .ok_or(ApiError::Unauthorized)?;
+
+        if !user.is_active || !password::verify_password(&req.password, &user.password_hash) {
+            return Err(ApiError::Unauthorized);
+        }
+
+        let tokens = self.create_session(user.id, ip, ua).await?;
+        Ok((user, tokens))
+    }
+
+    async fn create_session(&self, user_id: Uuid, ip: &str, ua: &str) -> ApiResult<SessionTokens> {
+        let access = random_hex(32);
+        let refresh = random_hex(48);
+        let (expires_at, refresh_expires_at) = self.ttl();
+
+        sqlx::query(
+            "INSERT INTO sessions (id, user_id, token_hash, refresh_token_hash, expires_at, \
+             refresh_expires_at, ip_address, user_agent)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(new_id())
+        .bind(user_id)
+        .bind(sha256_hex(&access))
+        .bind(sha256_hex(&refresh))
+        .bind(expires_at)
+        .bind(refresh_expires_at)
+        .bind(ip)
+        .bind(ua)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(SessionTokens {
+            access_token: access,
+            refresh_token: refresh,
+            expires_at,
+            access_ttl_secs: self.cfg.access_ttl.as_secs() as i64,
+        })
+    }
+
+    pub async fn resolve_session(&self, token: &str) -> ApiResult<SessionContext> {
+        let token_hash = sha256_hex(token);
+        let row = sqlx::query_as::<_, SessionRow>(&format!(
+            "SELECT {SESSION_COLS}, u.id, u.username, u.email, u.display_name, u.password_hash, \
+             u.role, u.avatar_url, u.bio, u.is_active, u.created_at, u.updated_at
+             FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token_hash = $1 AND s.revoked_at IS NULL"
+        ))
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+
+        if !row.user.is_active {
+            return Err(ApiError::Unauthorized);
+        }
+        if row.expires_at <= Utc::now() {
+            return Err(ApiError::Unauthorized);
+        }
+
+        if Utc::now() - row.last_used_at > Duration::hours(1) {
+            let _ = sqlx::query("UPDATE sessions SET last_used_at = now() WHERE id = $1")
+                .bind(row.session_id)
+                .execute(&self.pool)
+                .await;
+        }
+
+        let perms_raw = crate::users::repo::permissions_of(&self.pool, row.user.id).await?;
+        let permissions = perms_raw
+            .iter()
+            .filter_map(|p| Permission::parse(p))
+            .collect();
+
+        Ok(SessionContext {
+            user: row.user,
+            session_id: row.session_id,
+            permissions,
+        })
+    }
+
+    pub async fn refresh(
+        &self,
+        refresh_token: &str,
+        ip: &str,
+        ua: &str,
+    ) -> ApiResult<(User, SessionTokens)> {
+        let hash = sha256_hex(refresh_token);
+        let row = sqlx::query_as::<_, SessionRow>(&format!(
+            "SELECT {SESSION_COLS}, u.id, u.username, u.email, u.display_name, u.password_hash, \
+             u.role, u.avatar_url, u.bio, u.is_active, u.created_at, u.updated_at
+             FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL"
+        ))
+        .bind(&hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+
+        if row.refresh_expires_at <= Utc::now() || !row.user.is_active {
+            return Err(ApiError::Unauthorized);
+        }
+
+        let access = random_hex(32);
+        let new_refresh = random_hex(48);
+        let (expires_at, refresh_expires_at) = self.ttl();
+
+        let updated = sqlx::query_scalar::<_, i64>(
+            "UPDATE sessions
+             SET token_hash = $2, refresh_token_hash = $3, expires_at = $4, refresh_expires_at = $5,
+                 rotated_at = COALESCE(rotated_at, now()), last_used_at = now(), ip_address = $6, user_agent = $7
+             WHERE id = $1 AND refresh_token_hash = $8 AND revoked_at IS NULL
+             RETURNING 1",
+        )
+        .bind(row.session_id)
+        .bind(sha256_hex(&access))
+        .bind(sha256_hex(&new_refresh))
+        .bind(expires_at)
+        .bind(refresh_expires_at)
+        .bind(ip)
+        .bind(ua)
+        .bind(&hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if updated.is_none() {
+            return Err(ApiError::Unauthorized);
+        }
+
+        Ok((
+            row.user,
+            SessionTokens {
+                access_token: access,
+                refresh_token: new_refresh,
+                expires_at,
+                access_ttl_secs: self.cfg.access_ttl.as_secs() as i64,
+            },
+        ))
+    }
+
+    pub async fn logout(&self, token: &str) -> ApiResult<()> {
+        let hash = sha256_hex(token);
+        sqlx::query(
+            "UPDATE sessions SET revoked_at = now()
+             WHERE (token_hash = $1 OR refresh_token_hash = $1) AND revoked_at IS NULL",
+        )
+        .bind(&hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn revoke_all_for_user(&self, user_id: Uuid) -> ApiResult<u64> {
+        let result = sqlx::query(
+            "UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn list_sessions(
+        &self,
+        user_id: Uuid,
+        current_session: Uuid,
+    ) -> ApiResult<Vec<SessionInfo>> {
+        let rows: Vec<SessionInfo> = sqlx::query_as(
+            "SELECT id, ip_address, user_agent, created_at, last_used_at, expires_at,
+                    (id = $2) AS current
+             FROM sessions
+             WHERE user_id = $1 AND revoked_at IS NULL AND refresh_expires_at > now()
+             ORDER BY last_used_at DESC",
+        )
+        .bind(user_id)
+        .bind(current_session)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn revoke_session(&self, user_id: Uuid, session_id: Uuid) -> ApiResult<()> {
+        let result = sqlx::query(
+            "UPDATE sessions SET revoked_at = now()
+             WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(ApiError::not_found("session"));
+        }
+        Ok(())
+    }
+
+    // ---------------- email verification codes ----------------
+
+    /// Generates a 6-digit code, stores only its hash. Delivery is pluggable;
+    /// the caller decides (SMTP / webhook / dev echo).
+    pub async fn request_email_code(&self, user_id: Uuid) -> ApiResult<String> {
+        let code: String = {
+            let hexs = crate::utils::random_hex(3);
+            let digits: Vec<String> = hexs
+                .bytes()
+                .map(|b| (b'0' + (b % 10)).to_string())
+                .collect();
+            digits.join("")
+        };
+
+        sqlx::query(
+            "INSERT INTO email_verifications (user_id, code_hash, expires_at)
+             VALUES ($1, $2, now() + INTERVAL '15 minutes')
+             ON CONFLICT (user_id) DO UPDATE SET
+                code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at,
+                attempts = 0, created_at = now()",
+        )
+        .bind(user_id)
+        .bind(sha256_hex(&code))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(code)
+    }
+
+    pub async fn verify_email_code(&self, user_id: Uuid, code: &str) -> ApiResult<()> {
+        let row: Option<(String, chrono::DateTime<Utc>, i32)> = sqlx::query_as(
+            "SELECT code_hash, expires_at, attempts FROM email_verifications WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((hash, expires_at, mut attempts)) = row else {
+            return Err(ApiError::bad_request("no verification code requested"));
+        };
+
+        if expires_at < Utc::now() {
+            return Err(ApiError::bad_request("verification code expired"));
+        }
+
+        let clean = code.trim();
+        if clean.len() != 6 || sha256_hex(clean) != hash {
+            attempts += 1;
+            if attempts >= 5 {
+                sqlx::query("DELETE FROM email_verifications WHERE user_id = $1")
+                    .bind(user_id)
+                    .execute(&self.pool)
+                    .await?;
+                return Err(ApiError::bad_request(
+                    "too many attempts; request a new code",
+                ));
+            }
+            sqlx::query("UPDATE email_verifications SET attempts = $2 WHERE user_id = $1")
+                .bind(user_id)
+                .bind(attempts)
+                .execute(&self.pool)
+                .await?;
+            return Err(ApiError::bad_request("invalid verification code"));
+        }
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = now() WHERE id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM email_verifications WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn revoke_others(&self, user_id: Uuid, keep_session: Uuid) -> ApiResult<u64> {
+        let result = sqlx::query(
+            "UPDATE sessions SET revoked_at = now()
+             WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(keep_session)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    fn lockout_key(identifier: &str, ip: &str) -> String {
+        sha256_hex(&format!("{ip}:{identifier}"))
+    }
+
+    async fn lockout_status(&self, key: &str) -> ApiResult<bool> {
+        let locked: Option<(bool,)> =
+            sqlx::query_as("SELECT locked_until > now() FROM login_lockouts WHERE key = $1")
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(locked.map(|(locked,)| locked).unwrap_or(false))
+    }
+
+    async fn record_login_failure(&self, key: &str) -> ApiResult<()> {
+        let threshold = self.cfg.lockout_threshold as i32;
+        let window_secs = self.cfg.lockout_window.as_secs() as i64;
+        let lock_secs = self.cfg.lockout_duration.as_secs() as i64;
+
+        sqlx::query(
+            "INSERT INTO login_lockouts (key, failures, window_started_at)
+             VALUES ($1, 1, now())
+             ON CONFLICT (key) DO UPDATE SET
+                failures = CASE
+                    WHEN login_lockouts.window_started_at < now() - make_interval(secs => $2)
+                    THEN 1 ELSE login_lockouts.failures + 1 END,
+                window_started_at = CASE
+                    WHEN login_lockouts.window_started_at < now() - make_interval(secs => $2)
+                    THEN now() ELSE login_lockouts.window_started_at END,
+                locked_until = CASE
+                    WHEN (CASE
+                        WHEN login_lockouts.window_started_at < now() - make_interval(secs => $2)
+                        THEN 1 ELSE login_lockouts.failures + 1 END) >= $3
+                    THEN now() + make_interval(secs => $4)
+                    ELSE login_lockouts.locked_until END",
+        )
+        .bind(key)
+        .bind(window_secs)
+        .bind(threshold)
+        .bind(lock_secs)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn clear_login_failures(&self, key: &str) -> ApiResult<()> {
+        sqlx::query("DELETE FROM login_lockouts WHERE key = $1")
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Login with per-identifier+IP lockout protection.
+    pub async fn secure_login(
+        &self,
+        req: &crate::auth::handlers::LoginRequest,
+        ip: &str,
+        ua: &str,
+    ) -> ApiResult<(User, SessionTokens)> {
+        if !crate::auth::password::password_meets_policy(
+            &req.password,
+            self.cfg.password_min_length,
+        ) {
+            return Err(ApiError::Unauthorized);
+        }
+
+        let key = Self::lockout_key(&req.identifier, ip);
+        let ident_hash = sha256_hex(&format!("user:{}", req.identifier.to_lowercase()));
+        let iph = crate::admin_gate::ip_hash(ip);
+        if self.lockout_status(&key).await? {
+            return Err(ApiError::TooManyRequests {
+                retry_after: self.cfg.lockout_duration.as_secs() as i64,
+            });
+        }
+        // Admin-surface bans reject before any credential work.
+        if crate::security::routes::admin_banned_any(&self.pool, &[&ident_hash, &iph]).await {
+            metrics::counter!("admin_ban_blocked_total").increment(1);
+            return Err(ApiError::forbidden("banned from the admin surface"));
+        }
+
+        match self.login(req, ip, ua).await {
+            Ok(result) => {
+                self.clear_login_failures(&key).await?;
+                self.enforce_admin_totp(&result.0, req).await?;
+                self.admin_post_login_checks(&result.0, ip).await?;
+                Ok(result)
+            }
+            Err(err) => {
+                self.record_login_failure(&key).await?;
+                self.escalate_admin_failures(&req.identifier, &key, &ident_hash, &iph)
+                    .await;
+                Err(err)
+            }
+        }
+    }
+
+    /// Admins with TOTP enabled must present a valid 6-digit code.
+    /// Missing/wrong → `403 totp_required` (counts as a failure).
+    async fn enforce_admin_totp(
+        &self,
+        user: &User,
+        req: &crate::auth::handlers::LoginRequest,
+    ) -> ApiResult<()> {
+        if user.role != crate::users::models::Role::Admin {
+            return Ok(());
+        }
+        let enabled: bool =
+            sqlx::query_scalar("SELECT COALESCE(totp_enabled, FALSE) FROM users WHERE id = $1")
+                .bind(user.id)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(false);
+        if !enabled {
+            return Ok(());
+        }
+        let secret: Option<String> =
+            sqlx::query_scalar("SELECT totp_secret FROM users WHERE id = $1")
+                .bind(user.id)
+                .fetch_one(&self.pool)
+                .await
+                .ok()
+                .flatten();
+
+        let ok = match (secret.as_deref(), req.totp_code.as_deref()) {
+            (Some(s), Some(raw)) => raw
+                .trim()
+                .parse::<u32>()
+                .is_ok_and(|code| crate::auth::totp::verify(s, code, chrono::Utc::now().timestamp())),
+            _ => false,
+        };
+        if ok {
+            return Ok(());
+        }
+        metrics::counter!("admin_totp_rejected_total").increment(1);
+        Err(ApiError::forbidden("totp_required"))
+    }
+
+    /// TOTP enforcement + behavioral baseline for administrator logins.
+    async fn admin_post_login_checks(&self, user: &User, ip: &str) -> ApiResult<()> {
+        if user.role != crate::users::models::Role::Admin {
+            return Ok(());
+        }
+        let totp_enabled: bool =
+            sqlx::query_scalar("SELECT COALESCE(totp_enabled, FALSE) FROM users WHERE id = $1")
+                .bind(user.id)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(false);
+
+        // Behavioral baseline: is this IP prefix / hour unusual for this admin?
+        let prefix = ip.split('.').take(2).collect::<Vec<_>>().join(".");
+        let seen_prefix: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM admin_login_history \
+             WHERE user_id = $1 AND ip_prefix = $2)",
+        )
+        .bind(user.id)
+        .bind(&prefix)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(true);
+        sqlx::query(
+            "INSERT INTO admin_login_history (id, user_id, ip_prefix, hour_of_day)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(new_id())
+        .bind(user.id)
+        .bind(&prefix)
+        .bind(chrono::Timelike::hour(&chrono::Utc::now()) as i32)
+        .execute(&self.pool)
+        .await
+        .ok();
+
+        if totp_enabled {
+            // The code was verified by the handler before reaching here.
+            crate::audit::log_simple(
+                &self.pool,
+                Some(user.id),
+                "admin.login.totp_ok",
+                &format!("prefix={prefix}"),
+            )
+            .await;
+        }
+        if !seen_prefix {
+            crate::audit::log(
+                &self.pool,
+                Some(user.id),
+                "admin.login.new_network",
+                &prefix,
+                serde_json::json!({ "totp_enabled": totp_enabled }),
+                ip,
+            )
+            .await;
+            metrics::counter!("admin_login_new_network_total").increment(1);
+        }
+        Ok(())
+    }
+
+    /// ≥ lockout_threshold failed attempts against an admin identity:
+    /// escalate to a timed admin-surface ban covering the username hash AND
+    /// source address — every subsequent admin request is rejected till
+    /// timeout regardless of credentials.
+    async fn escalate_admin_failures(
+        &self,
+        identifier: &str,
+        key: &str,
+        ident_hash: &str,
+        iph: &str,
+    ) {
+        let Ok(Some((is_admin,))) = sqlx::query_as::<_, (bool,)>(
+            "SELECT EXISTS (SELECT 1 FROM users \
+             WHERE role = 'admin' AND (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)))",
+        )
+        .bind(identifier)
+        .fetch_optional(&self.pool)
+        .await else { return };
+        if !is_admin {
+            return;
+        }
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(failures, 0) FROM login_lockouts WHERE key = $1",
+        )
+        .bind(key)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
+        if count < i64::from(self.cfg.lockout_threshold) {
+            return;
+        }
+
+        let until = chrono::Utc::now()
+            + chrono::Duration::seconds(self.cfg.lockout_duration.as_secs() as i64 * 4);
+        for target in [ident_hash, iph] {
+            let _ = sqlx::query(
+                "INSERT INTO admin_bans (id, identifier, kind, reason, until)
+                 VALUES ($1, $2, 'lockout', 'repeated failed admin logins', $3)
+                 ON CONFLICT (identifier, kind) DO UPDATE SET until = EXCLUDED.until",
+            )
+            .bind(new_id())
+            .bind(target)
+            .bind(until)
+            .execute(&self.pool)
+            .await;
+        }
+        crate::audit::log(
+            &self.pool,
+            None,
+            "security.admin_lockout_escalated",
+            identifier,
+            serde_json::json!({ "until": until }),
+            "",
+        )
+        .await;
+        tracing::error!(identifier, until = %until, "admin lockout escalated");
+    }
+
+    pub async fn password_strength_ok(&self, password: &str) -> ApiResult<()> {
+        crate::auth::password::password_policy_error(password, self.cfg.password_min_length)
+    }
+
+    /// Creates a single-use reset token. Returns the raw token when the user
+    /// exists so callers can deliver it (email/webhook); returns Ok(None) for
+    /// unknown emails to prevent enumeration.
+    pub async fn request_password_reset(&self, email: &str, ip: &str) -> ApiResult<Option<String>> {
+        let Some(user) = crate::users::repo::find_by_email(&self.pool, email).await? else {
+            return Ok(None);
+        };
+
+        let token = random_hex(48);
+        sqlx::query(
+            "INSERT INTO password_resets (id, user_id, token_hash, ip_address, expires_at)
+             VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))",
+        )
+        .bind(new_id())
+        .bind(user.id)
+        .bind(sha256_hex(&token))
+        .bind(ip)
+        .bind(1800i64)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(Some(token))
+    }
+
+    pub async fn confirm_password_reset(&self, token: &str, new_password: &str) -> ApiResult<User> {
+        self.password_strength_ok(new_password).await?;
+
+        let mut tx = self.pool.begin().await?;
+
+        let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT pr.user_id, u.id FROM password_resets pr
+             JOIN users u ON u.id = pr.user_id
+             WHERE pr.token_hash = $1 AND pr.used_at IS NULL AND pr.expires_at > now()
+             FOR UPDATE OF pr SKIP LOCKED",
+        )
+        .bind(sha256_hex(token))
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some((reset_user_id, _)) = row else {
+            tx.rollback().await.ok();
+            return Err(ApiError::bad_request("reset link is invalid or expired"));
+        };
+
+        let salt = password::new_salt();
+        let hash = password::hash_password(new_password, &salt)?;
+
+        sqlx::query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1")
+            .bind(reset_user_id)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("UPDATE password_resets SET used_at = now() WHERE token_hash = $1")
+            .bind(sha256_hex(token))
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        self.revoke_all_for_user(reset_user_id).await?;
+        crate::users::repo::find_by_id(&self.pool, reset_user_id)
+            .await?
+            .ok_or_else(|| ApiError::internal_msg("user vanished during reset"))
+    }
+}

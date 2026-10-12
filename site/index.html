@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SPACE · How It Works</title>
+<link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">SPACE <span>· how it works</span></div>
+  <nav id="nav">
+    <a href="#play">Play</a>
+    <a href="#security">Security</a>
+    <a href="#platform">Platform</a>
+  </nav>
+</header>
+
+<!-- ============================== HERO ============================== -->
+<section class="hero">
+  <h1>Clients ask.<br/>SPACE finds, secures, streams.</h1>
+  <p class="lede">
+    One self-hosted backend for movies, series, books, manga and music.
+    Clients never choose where media comes from — three endpoints do everything.
+  </p>
+  <div class="hero-stats">
+    <div><b>/api/search/all</b><span>find anything</span></div>
+    <div><b>/api/resolve</b><span>get best stream</span></div>
+    <div><b>/ws</b><span>live events</span></div>
+    <div><b>0</b><span>secrets in clients</span></div>
+  </div>
+</section>
+
+<!-- ============================== PLAY ============================== -->
+<section id="play" class="section">
+  <h2>How a play works — 11 stages, one request</h2>
+  <p class="sub">Press run. The client sees only the final JSON.</p>
+
+  <div class="panel">
+    <div class="req-line"><span class="m post">POST</span> /api/resolve
+      <code>{ token, preferences: { quality, language, subtitles } }</code>
+    </div>
+    <div class="stepper-head">
+      <button id="run-btn" class="btn accent">▶ Run pipeline</button>
+      <span id="step-status" class="muted">idle</span>
+    </div>
+    <ol id="steps">
+      <li data-note="Parse the opaque search token — the backing source stays hidden until now.">Identify media</li>
+      <li data-note="Healthy providers ordered: primary first, category matches next.">Find sources</li>
+      <li data-note="Circuit breaker skips dead backends — zero wasted latency.">Check health</li>
+      <li data-note="Fan out for candidate streams; per-provider failures are isolated.">Gather candidates</li>
+      <li data-note="Score: kind weight, quality distance, language + subtitle hints, source success rate.">Rank</li>
+      <li data-note="Exact quality match wins; close degrades gracefully; unknown ranks lowest.">Quality</li>
+      <li data-note="Labels scanned for language signals (eng / japanese / dub…).">Language</li>
+      <li data-note="sub / srt / vtt mentions boost streams matching your preference.">Subtitles</li>
+      <li data-note="Only providers that returned playable links survive.">Availability</li>
+      <li data-note="Winner selected; runners-up become fallbacks for automatic failover.">Select + fallbacks</li>
+      <li data-note="Short-lived signed grant issued, watermark stamped on URL, stream returns.">Stream ✅</li>
+    </ol>
+    <pre id="step-note" class="note">// press Run</pre>
+    <div id="result-card" class="result hidden">
+      <div class="res-title ok">200 OK</div>
+<pre>{ "resolution_id": "0192…", "kind": "hls",
+  "url": "https://…/index.m3u8?wm=a1b2c3d4e5f60718",
+  "quality": "1080p", "expires_at_unix": 1750000000,
+  "authorization": "&lt;base64&gt;.&lt;hmac&gt;",
+  "fallbacks": [ { "kind": "mp4" } ],
+  "watermark": "a1b2c3d4e5f60718" }</pre>
+    </div>
+  </div>
+
+  <div class="three-cards">
+    <div class="card"><h3>Sources</h3><p>Built-ins + HTTP plugins behind one trait (<code>search · item · capabilities · browse</code>). Circuit breaker + live telemetry per source drive ranking automatically.</p></div>
+    <div class="card"><h3>Search</h3><p><code>/api/search/all</code> fans out in parallel, merges duplicate titles across sources into one card listing every contributor, ranks by relevance.</p></div>
+    <div class="card"><h3>Failover</h3><p>Playback breaks? Ranked fallbacks take over — or the resolver retries other sources by title. The client just presses play again.</p></div>
+  </div>
+</section>
+
+<!-- ============================== SECURITY ============================== -->
+<section id="security" class="section">
+  <h2>Security, end to end</h2>
+  <p class="sub">Every playback authorization passes through one controller. Risk layer off by default — admins tune it.</p>
+
+  <div class="four-cards">
+    <div class="card">
+      <h3>Risk gate</h3>
+      <p>Signals → score → decision:</p>
+      <table class="mini">
+        <tr><td class="ok">allow</td><td>proceed</td></tr>
+        <tr><td class="warn">challenge</td><td>403 until acknowledged</td></tr>
+        <tr><td class="err">revoke</td><td>blocked, audited</td></tr>
+      </table>
+      <p class="muted">Sessions · devices · resolves/h · distinct TLS fingerprints · prior flags.</p>
+    </div>
+    <div class="card">
+      <h3>Fingerprint-bound grants</h3>
+      <p>Grants bind to the client's TLS context (edge sends <code>X-JA4</code>). Stolen token + different stack = <span class="err">403 mismatch</span>.</p>
+      <p class="muted">HMAC-SHA256 · TTL 600 s · instant revocation.</p>
+    </div>
+    <div class="card">
+      <h3>Segment scopes</h3>
+      <p>Parent grant mints child tickets scoped to <code>seg:N</code>, ≤120 s. Initial access authorizes one segment — not the whole file.</p>
+    </div>
+    <div class="card">
+      <h3>Keys · watermark · origin</h3>
+      <p>AES-256-GCM key hierarchy, HLS AES-128 via grant-gated endpoint. Every URL carries <code>wm=…</code> — leaks trace to one session. CDN-only origin via <code>X-Origin-Token</code>.</p>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h3>Offline playback — 24 h keys</h3>
+    <p><code>POST /api/playback/offline-keys</code> → content key delivered once over TLS, bound to user + media + device. Client stores it in OS keystore (Keychain / DPAPI / Keystore). After 24 h the next playback window needs a fresh license — key rotation kills old downloads permanently.</p>
+  </div>
+</section>
+
+<!-- ============================== PLATFORM ============================== -->
+<section id="platform" class="section">
+  <h2>The rest of the platform</h2>
+  <div class="six-cards">
+    <div class="card"><h3>Media graph</h3><p>12 relation types link any format — manga ↔ anime ↔ novel ↔ film. <code>/journey</code> traverses franchises; <code>/discover/journeys</code> suggests the story format you haven't tried.</p></div>
+    <div class="card"><h3>Universal progress</h3><p>Seconds for video/audio, pages+% for books/manga — one shape, one rail: <code>GET /api/continue</code> across every type.</p></div>
+    <div class="card"><h3>Realtime</h3><p>Event bus persists everything notable and bridges it onto <code>/ws</code>. Heartbeats reap dead sockets; personal rooms deliver notifications privately.</p></div>
+    <div class="card"><h3>AI copilot</h3><p>Admin console brain: heuristic rules or your own LLM endpoint. Autonomy dial: observe → suggest → act. Whitelisted actions only, fully audited.</p></div>
+    <div class="card"><h3>Self-running ops</h3><p>5xx timeline with AI spike alerts. Duplicates auto-merge. Cache warmer precomputes rails before demand. Analytics age into aggregates.</p></div>
+    <div class="card"><h3>Personal twin</h3><p>Behavioral model per user — genres, formats, completion, pace, discovery appetite — powering ranking and rails. Snapshotted daily.</p></div>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-inner">
+    <div><b>SPACE media server</b><br/><span class="muted">single binary · Postgres · optional Redis</span></div>
+    <div class="muted">spec <code>/api-docs/openapi.json</code> · ui <code>/docs</code> · admin <code>/admin.html</code></div>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

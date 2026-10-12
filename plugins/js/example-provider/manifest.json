@@ -1,0 +1,10 @@
+{
+  "id": "example-provider",
+  "name": "Example Provider",
+  "version": "1.0.0",
+  "author": "SPACE",
+  "description": "Reference provider. Shows the contract and returns a public test stream so playback can be verified end to end.",
+  "supportedTypes": ["movie", "tv"],
+  "filename": "provider.js",
+  "enabled": false
+}
